@@ -3,8 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Private Player</title>
-  <!-- Load HLS.js to render HLS streams inside standard HTML5 video elements -->
+  <title>Private Streamer</title>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f0f; color: #fff; text-align: center; margin: 0; padding: 20px; }
@@ -41,7 +40,7 @@
 
       if (!url) return;
 
-      status.innerText = 'Resolving media stream...';
+      status.innerText = 'Extracting media stream...';
 
       if (hlsInstance) {
         hlsInstance.destroy();
@@ -51,26 +50,22 @@
         const response = await fetch(`/get-hls-manifest?url=${encodeURIComponent(url)}`);
         const data = await response.json();
 
-        if (data.status === 'hls' && data.url) {
-          status.innerText = 'Playing HLS stream...';
+        if (data.status === 'success' && data.url) {
+          status.innerText = 'Playing video stream...';
           
-          if (Hls.isSupported()) {
+          if (data.url.includes('.m3u8') && Hls.isSupported()) {
             hlsInstance = new Hls();
             hlsInstance.loadSource(data.url);
             hlsInstance.attachMedia(video);
             hlsInstance.on(Hls.Events.MANIFEST_PARSED, function () {
               video.play();
             });
-          } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          } else {
             video.src = data.url;
             video.play();
           }
-        } else if (data.status === 'direct' && data.url) {
-          status.innerText = 'Playing direct stream buffer...';
-          video.src = data.url;
-          video.play();
         } else {
-          status.innerText = 'Unable to resolve video stream. Try another link.';
+          status.innerText = 'All API nodes failed. Please try a different video link.';
         }
       } catch (err) {
         console.error(err);
