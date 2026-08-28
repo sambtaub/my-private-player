@@ -9,67 +9,46 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// List of public Invidious API mirrors
+// Primary public API mirrors
 const INVIDIOUS_INSTANCES = [
-    'https://invidious.nerdvpn.de',
     'https://inv.tux.pizza',
-    'https://invidious.drgns.space',
-    'https://vid.puffyan.us'
+    'https://invidious.nerdvpn.de',
+    'https://vid.puffyan.us',
+    'https://invidious.drgns.space'
 ];
 
-app.get('/stream', async (req, res) => {
+app.get('/get-stream-url', async (req, res) => {
     const videoUrl = req.query.url;
-    if (!videoUrl) return res.status(400).send('URL is required');
+    if (!videoUrl) return res.status(400).json({ error: 'URL is required' });
 
-    // Extract 11-character Video ID
+    // Extract 11-character YouTube Video ID
     const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
-    if (!match) return res.status(400).send('Invalid YouTube URL');
+    if (!match) return res.status(400).json({ error: 'Invalid YouTube URL' });
 
     const videoId = match[1];
-    let streamUrl = null;
 
-    // Cycle through public Invidious instances until a working stream is resolved
+    // Try instances sequentially until a working link is retrieved
     for (const instance of INVIDIOUS_INSTANCES) {
         try {
-            const apiRes = await fetch(`${instance}/api/v1/videos/${videoId}`);
+            const apiRes = await fetch(`${instance}/api/v1/videos/${videoId}`, {
+                headers: { 'User-Agent': 'Mozilla/5.0' }
+            });
             if (!apiRes.ok) continue;
 
             const data = await apiRes.json();
             
-            // Grab format stream with combined audio and video
-            const format = data.formatStreams.find(f => f.container === 'mp4') || data.formatStreams[0];
+            // Find standard MP4 format containing combined video + audio
+            const format = data.formatStreams?.find(f => f.container === 'mp4' || f.encoding === 'h264') || data.formatStreams?.[0];
+            
             if (format && format.url) {
-                streamUrl = format.url;
-                break;
+                return res.json({ streamUrl: format.url });
             }
         } catch (e) {
-            console.log(`Failed instance ${instance}, trying next...`);
+            console.log(`Failed fetching from ${instance}, trying next...`);
         }
     }
 
-    if (!streamUrl) {
-        return res.status(500).send('Could not fetch video from active streaming nodes.');
-    }
-
-    try {
-        // Fetch raw video stream bytes and pipe directly back to browser
-        const videoStream = await fetch(streamUrl);
-        res.setHeader('Content-Type', 'video/mp4');
-
-        const reader = videoStream.body.getReader();
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
-        }
-        res.end();
-
-    } catch (err) {
-        console.error('Piping Error:', err);
-        if (!res.headersSent) {
-            res.status(500).send('Stream relay broke.');
-        }
-    }
+    return res.status(500).json({ error: 'Could not extract stream URL. Try another video link.' });
 });
 
 const PORT = process.env.PORT || 8000;
