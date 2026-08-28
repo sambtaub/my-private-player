@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const youtubedl = require('yt-dlp-exec');
 const app = express();
 
 app.use(express.json());
@@ -11,77 +12,45 @@ app.get('/', (req, res) => {
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
-// Redundant public API instances
-const API_NODES = [
-    { type: 'cobalt', url: 'https://api.cobalt.tools' },
-    { type: 'cobalt', url: 'https://cobalt-api.kwiats.com' },
-    { type: 'piped', url: 'https://pipedapi.kavin.rocks' },
-    { type: 'piped', url: 'https://api.piped.privacydev.net' }
-];
-
-app.get('/get-hls-manifest', async (req, res) => {
+app.get('/get-stream', async (req, res) => {
     const videoUrl = req.query.url;
     if (!videoUrl) return res.status(400).json({ error: 'URL required' });
 
-    const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
-    if (!match) return res.status(400).json({ error: 'Invalid YouTube URL' });
+    try {
+        // Run local yt-dlp binary to extract raw stream manifest & formats directly
+        const output = await youtubedl(videoUrl, {
+            dumpSingleJson: true,
+            noCheckCertificates: true,
+            noWarnings: true,
+            preferFreeFormats: true,
+            youtubeSkipDashManifest: false
+        });
 
-    const videoId = match[1];
-
-    for (const node of API_NODES) {
-        try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 4000);
-
-            let mediaUrl = null;
-
-            if (node.type === 'cobalt') {
-                const apiRes = await fetch(`${node.url}/`, {
-                    method: 'POST',
-                    headers: {
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        url: videoUrl,
-                        vQuality: '720',
-                        isAudioOnly: false
-                    }),
-                    signal: controller.signal
-                });
-                clearTimeout(timeout);
-
-                if (apiRes.ok) {
-                    const data = await apiRes.json();
-                    if (data.url) mediaUrl = data.url;
-                    else if (data.picker && data.picker.length > 0) mediaUrl = data.picker[0].url;
-                }
-            } else if (node.type === 'piped') {
-                const apiRes = await fetch(`${node.url}/streams/${videoId}`, { signal: controller.signal });
-                clearTimeout(timeout);
-
-                if (apiRes.ok) {
-                    const data = await apiRes.json();
-                    if (data.hls) {
-                        mediaUrl = data.hls;
-                    } else if (data.videoStreams && data.videoStreams.length > 0) {
-                        const stream = data.videoStreams.find(s => s.mimeType?.includes('mp4')) || data.videoStreams[0];
-                        mediaUrl = stream?.url;
-                    }
-                }
-            }
-
-            if (mediaUrl) {
-                return res.json({ status: 'success', url: mediaUrl });
-            }
-        } catch (e) {
-            console.log(`Failed node: ${node.url}`);
+        // 1. Prefer HLS (.m3u8) format to bypass MP4 browser blocks
+        let hlsUrl = output.manifest_url;
+        
+        // 2. Fallback to direct video stream if HLS manifest isn't explicit
+        if (!hlsUrl && output.formats) {
+            const format = output.formats.find(f => f.manifest_url || (f.ext === 'mp4' && f.acodec !== 'none' && f.vcodec !== 'none')) 
+                        || output.formats[0];
+            hlsUrl = format.manifest_url || format.url;
         }
-    }
 
-    // Always return HTTP 200 with an error state to prevent 502 crashes
-    return res.json({ status: 'error', message: 'All backend resolution nodes failed.' });
+        if (hlsUrl) {
+            return res.json({ status: 'success', url: hlsUrl });
+        } else {
+            return res.json({ status: 'error', message: 'No playable stream format found.' });
+        }
+    } catch (err) {
+        console.error('yt-dlp extraction error:', err.message);
+        
+        // Fail-safe response to prevent 502 server crashes
+        return res.json({ 
+            status: 'error', 
+            message: 'Failed to extract video stream. YouTube may be throttling this video ID.' 
+        });
+    }
 });
 
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
