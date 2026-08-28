@@ -9,65 +9,67 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Primary Piped & Invidious instances
-const API_NODES = [
-    'https://pipedapi.kavin.rocks',
-    'https://api.piped.privacydev.net',
-    'https://inv.tux.pizza',
-    'https://invidious.nerdvpn.de'
+// Primary public API instances for raw stream fetching
+const ENDPOINTS = [
+    'https://pipedapi.kavin.rocks/streams/',
+    'https://api.piped.privacydev.net/streams/',
+    'https://inv.tux.pizza/api/v1/videos/'
 ];
 
-app.get('/resolve-video', async (req, res) => {
+app.get('/fetch-stream', async (req, res) => {
     const videoUrl = req.query.url;
-    if (!videoUrl) return res.status(400).json({ error: 'URL required' });
+    if (!videoUrl) return res.status(400).send('URL required');
 
-    // Extract 11-character Video ID
     const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
-    if (!match) return res.status(400).json({ error: 'Invalid YouTube URL' });
+    if (!match) return res.status(400).send('Invalid URL');
 
     const videoId = match[1];
 
-    // Attempt direct video stream resolution
-    for (const node of API_NODES) {
+    for (const base of ENDPOINTS) {
         try {
-            const endpoint = node.includes('piped') 
-                ? `${node}/streams/${videoId}` 
-                : `${node}/api/v1/videos/${videoId}`;
-
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3000); // 3s timeout per node
+            const timeout = setTimeout(() => controller.abort(), 4000);
 
-            const response = await fetch(endpoint, { signal: controller.signal });
+            const apiRes = await fetch(`${base}${videoId}`, { signal: controller.signal });
             clearTimeout(timeout);
 
-            if (!response.ok) continue;
+            if (!apiRes.ok) continue;
 
-            const data = await response.json();
-            
-            // Extract combined stream format
-            let streamUrl = null;
-            if (node.includes('piped') && data.videoStreams) {
+            const data = await apiRes.json();
+            let rawUrl = null;
+
+            if (data.videoStreams) {
+                // Find compatible combined MP4 stream
                 const stream = data.videoStreams.find(s => s.mimeType?.includes('mp4') && s.quality === '720p') || data.videoStreams[0];
-                streamUrl = stream?.url;
+                rawUrl = stream?.url;
             } else if (data.formatStreams) {
                 const stream = data.formatStreams.find(f => f.container === 'mp4') || data.formatStreams[0];
-                streamUrl = stream?.url;
+                rawUrl = stream?.url;
             }
 
-            if (streamUrl) {
-                return res.json({ mode: 'direct', url: streamUrl });
+            if (rawUrl) {
+                // Fetch the actual media binary and relay it
+                const mediaRes = await fetch(rawUrl);
+                if (!mediaRes.ok) continue;
+
+                res.setHeader('Content-Type', 'video/mp4');
+                res.setHeader('Access-Control-Allow-Origin', '*');
+
+                const reader = mediaRes.body.getReader();
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    res.write(value);
+                }
+                return res.end();
             }
         } catch (e) {
-            console.log(`Node failed: ${node}`);
+            console.log(`Endpoint failed: ${base}`);
         }
     }
 
-    // Fallback mode: Embed player (prevents 500 server crash)
-    return res.json({ 
-        mode: 'embed', 
-        url: `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&modestbranding=1&rel=0` 
-    });
+    return res.status(502).send('Unable to bypass media restrictions.');
 });
 
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
