@@ -3,58 +3,67 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Private Stream Player</title>
+  <title>Private Player</title>
   <style>
-    body { font-family: sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; }
-    input { width: 60%; max-width: 500px; padding: 12px; border-radius: 4px; border: 1px solid #333; background: #222; color: #fff; }
-    button { padding: 12px 18px; background: #28a745; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
-    #player-container { width: 90%; max-width: 850px; margin: 20px auto; }
-    video { width: 100%; height: auto; border-radius: 8px; background: #000; }
-    #status { margin-top: 10px; color: #aaa; }
+    body { font-family: Arial, sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; }
+    .controls { margin-bottom: 20px; }
+    input { width: 50%; max-width: 500px; padding: 12px; border-radius: 4px; border: 1px solid #333; background: #222; color: #fff; font-size: 14px; }
+    button { padding: 12px 20px; background: #28a745; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; margin-left: 5px; }
+    #player-wrapper { width: 90%; max-width: 850px; height: 480px; margin: 0 auto; background: #000; border-radius: 8px; overflow: hidden; }
+    video, iframe { width: 100%; height: 100%; border: none; }
+    #status { margin: 10px 0; color: #aaa; font-size: 14px; }
   </style>
 </head>
 <body>
 
   <h2>Private Video Player</h2>
-  <input type="text" id="url" placeholder="Paste YouTube link...">
-  <button onclick="playVideo()">Play</button>
   
+  <div class="controls">
+    <input type="text" id="url" placeholder="Paste YouTube link...">
+    <button onclick="playVideo()">Play</button>
+  </div>
+
   <div id="status"></div>
 
-  <div id="player-container">
-    <video id="player" controls autoplay></video>
+  <div id="player-wrapper">
+    <video id="video-element" controls autoplay style="display: none;"></video>
+    <iframe id="iframe-element" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="display: none;"></iframe>
   </div>
 
   <script>
     async function playVideo() {
       const url = document.getElementById('url').value;
       const status = document.getElementById('status');
-      const player = document.getElementById('player');
+      const videoEl = document.getElementById('video-element');
+      const iframeEl = document.getElementById('iframe-element');
 
       if (!url) return;
 
-      status.innerText = 'Bypassing firewall restrictions...';
-      player.src = '';
+      status.innerText = 'Resolving media source...';
+      videoEl.style.display = 'none';
+      iframeEl.style.display = 'none';
+      videoEl.src = '';
+      iframeEl.src = '';
 
       try {
-        // Request media directly through your Railway domain
-        const response = await fetch(`/proxy-stream?url=${encodeURIComponent(url)}`);
-        
-        if (!response.ok) {
-          throw new Error('Server returned ' + response.status);
+        const response = await fetch(`/resolve-video?url=${encodeURIComponent(url)}`);
+        const data = await response.json();
+
+        if (data.mode === 'direct') {
+          status.innerText = 'Playing direct stream...';
+          videoEl.style.display = 'block';
+          videoEl.src = data.url;
+          videoEl.play();
+        } else if (data.mode === 'embed') {
+          status.innerText = 'Playing via embedded proxy...';
+          iframeEl.style.display = 'block';
+          iframeEl.src = data.url;
+        } else {
+          status.innerText = 'Error resolving video source.';
         }
-
-        // Convert incoming stream into an in-memory Blob URL
-        const blob = await response.blob();
-        const localMediaUrl = URL.createObjectURL(blob);
-
-        status.innerText = 'Playing...';
-        player.src = localMediaUrl;
-        player.play();
-
       } catch (err) {
         console.error(err);
-        status.innerText = 'Failed to load video stream. Network filter blocked request.';
+        status.innerText = 'Failed to connect to backend.';
       }
     }
   </script>
