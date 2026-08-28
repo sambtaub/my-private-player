@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Private Streamer</title>
+  <title>Private Player</title>
+  <!-- Load HLS.js to render HLS streams inside standard HTML5 video elements -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f0f; color: #fff; text-align: center; margin: 0; padding: 20px; }
     .controls { margin-bottom: 20px; }
@@ -30,28 +32,50 @@
   </div>
 
   <script>
-    function playVideo() {
+    let hlsInstance = null;
+
+    async function playVideo() {
       const url = document.getElementById('url').value.trim();
       const status = document.getElementById('status');
-      const player = document.getElementById('player');
+      const video = document.getElementById('player');
 
       if (!url) return;
 
-      status.innerText = 'Routing stream through same-origin proxy...';
-      
-      // Request media binary directly from Railway origin
-      const proxyUrl = `/stream-pipe?url=${encodeURIComponent(url)}`;
-      player.src = proxyUrl;
-      player.load();
-      
-      player.onloadeddata = () => {
-        status.innerText = 'Playing...';
-        player.play();
-      };
+      status.innerText = 'Resolving media stream...';
 
-      player.onerror = () => {
-        status.innerText = 'Stream connection failed. Try another link.';
-      };
+      if (hlsInstance) {
+        hlsInstance.destroy();
+      }
+
+      try {
+        const response = await fetch(`/get-hls-manifest?url=${encodeURIComponent(url)}`);
+        const data = await response.json();
+
+        if (data.status === 'hls' && data.url) {
+          status.innerText = 'Playing HLS stream...';
+          
+          if (Hls.isSupported()) {
+            hlsInstance = new Hls();
+            hlsInstance.loadSource(data.url);
+            hlsInstance.attachMedia(video);
+            hlsInstance.on(Hls.Events.MANIFEST_PARSED, function () {
+              video.play();
+            });
+          } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.src = data.url;
+            video.play();
+          }
+        } else if (data.status === 'direct' && data.url) {
+          status.innerText = 'Playing direct stream buffer...';
+          video.src = data.url;
+          video.play();
+        } else {
+          status.innerText = 'Unable to resolve video stream. Try another link.';
+        }
+      } catch (err) {
+        console.error(err);
+        status.innerText = 'Network error fetching stream info.';
+      }
     }
   </script>
 
