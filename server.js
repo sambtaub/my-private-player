@@ -1,23 +1,6 @@
 const express = require('express');
-const { Innertube, UniversalCache } = require('youtubei.js');
 const path = require('path');
 const app = express();
-
-let youtube;
-
-// Initialize YouTube client with session caching enabled
-async function initYouTube() {
-    try {
-        youtube = await Innertube.create({
-            cache: new UniversalCache(false),
-            generate_session_locally: true
-        });
-        console.log('YouTube API initialized');
-    } catch (err) {
-        console.error('Init Error:', err);
-    }
-}
-initYouTube();
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -30,36 +13,43 @@ app.get('/stream', async (req, res) => {
     const videoUrl = req.query.url;
     if (!videoUrl) return res.status(400).send('URL is required');
 
-    if (!youtube) {
-        return res.status(503).send('Server is starting up, please try again in a few seconds.');
-    }
-
     try {
-        // Extract 11-character Video ID
-        const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
-        if (!match) return res.status(400).send('Invalid YouTube URL');
-
-        const videoId = match[1];
-
-        // Fetch streaming data specifically requesting combined formats (iOS client type avoids cloud blocks)
-        const stream = await youtube.download(videoId, {
-            type: 'video+audio',
-            quality: 'best',
-            client: 'IOS'
+        // Request stream resolution from Cobalt API
+        const response = await fetch('https://api.cobalt.tools/api/json', {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                url: videoUrl,
+                videoQuality: '720'
+            })
         });
 
-        res.setHeader('Content-Type', 'video/mp4');
+        const data = await response.json();
 
-        // Read and send stream chunks cleanly
-        for await (const chunk of stream) {
-            res.write(chunk);
+        if (data.status === 'stream' || data.status === 'redirect') {
+            // Pipe the clean, unblocked stream back to the client
+            const videoStream = await fetch(data.url);
+            res.setHeader('Content-Type', 'video/mp4');
+            
+            const reader = videoStream.body.getReader();
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                res.write(value);
+            }
+            return res.end();
+        } else {
+            console.error('Cobalt Error Response:', data);
+            return res.status(500).send('Unable to resolve video stream.');
         }
-        res.end();
 
     } catch (err) {
-        console.error('Stream Error Detail:', err);
+        console.error('Proxy Error:', err);
         if (!res.headersSent) {
-            res.status(500).send('Failed to stream video. The video may be region-restricted or unavailable.');
+            res.status(500).send('Failed to fetch media stream.');
         }
     }
 });
