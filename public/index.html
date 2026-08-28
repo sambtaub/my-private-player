@@ -8,6 +8,7 @@
     input { width: 60%; padding: 10px; border-radius: 4px; border: 1px solid #333; background: #222; color: #fff; }
     button { padding: 10px 15px; background: #28a745; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
     video { width: 80%; max-width: 800px; margin-top: 20px; border-radius: 8px; }
+    #status { margin-top: 10px; color: #aaa; }
   </style>
 </head>
 <body>
@@ -15,18 +16,37 @@
   <h2>Private Video Player</h2>
   <input type="text" id="url" placeholder="Paste YouTube link...">
   <button onclick="playVideo()">Play</button>
+  <div id="status"></div>
   <br>
   <video id="player" controls autoplay></video>
 
   <script>
-    function playVideo() {
+    async function playVideo() {
       const url = document.getElementById('url').value;
+      const status = document.getElementById('status');
+      const player = document.getElementById('player');
+      
       if (!url) return;
       
-      // Point the player to your own backend /stream route
-      const player = document.getElementById('player');
-      player.src = `/stream?url=${encodeURIComponent(url)}`;
-      player.load();
+      status.innerText = 'Extracting video link...';
+      player.src = '';
+
+      try {
+        const response = await fetch(`/get-stream-url?url=${encodeURIComponent(url)}`);
+        const data = await response.json();
+
+        if (data.streamUrl) {
+          status.innerText = 'Playing stream...';
+          player.src = data.streamUrl;
+          player.load();
+          player.play();
+        } else {
+          status.innerText = 'Error: ' + (data.error || 'Failed to resolve link.');
+        }
+      } catch (err) {
+        console.error(err);
+        status.innerText = 'Failed to connect to backend server.';
+      }
     }
   </script>
 
