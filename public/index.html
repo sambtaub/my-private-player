@@ -3,68 +3,54 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bypass Video Player</title>
+  <title>Private Streamer</title>
   <style>
-    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #fff; text-align: center; margin: 0; padding: 20px; }
-    .controls { margin: 20px 0; }
-    input { width: 60%; max-width: 500px; padding: 12px; border-radius: 6px; border: 1px solid #333; background: #1f1f1f; color: #fff; }
-    button { padding: 12px 24px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
-    #player-container { width: 90%; max-width: 800px; height: 450px; margin: 0 auto; background: #000; border-radius: 8px; overflow: hidden; }
-    video, iframe { width: 100%; height: 100%; border: none; }
-    #status { margin: 10px 0; color: #9ca3af; font-size: 14px; }
+    body { font-family: Arial, sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; }
+    .controls { margin-bottom: 20px; }
+    input { width: 60%; max-width: 500px; padding: 12px; border-radius: 4px; border: 1px solid #333; background: #222; color: #fff; font-size: 14px; }
+    button { padding: 12px 20px; background: #28a745; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; margin-left: 5px; }
+    #player-container { width: 90%; max-width: 850px; margin: 20px auto; }
+    video { width: 100%; height: auto; border-radius: 8px; background: #000; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+    #status { margin-top: 10px; color: #aaa; font-size: 14px; }
   </style>
 </head>
 <body>
 
-  <h2>Private Video Streamer</h2>
-  
+  <h2>Private Video Player</h2>
+
   <div class="controls">
-    <input type="text" id="url" placeholder="Paste YouTube Link...">
-    <button onclick="streamMedia()">Play</button>
+    <input type="text" id="url" placeholder="Paste YouTube link...">
+    <button onclick="playVideo()">Play</button>
   </div>
 
   <div id="status"></div>
 
   <div id="player-container">
-    <video id="video-player" controls autoplay style="display: none;"></video>
-    <iframe id="iframe-player" allow="autoplay; encrypted-media" allowfullscreen style="display: none;"></iframe>
+    <video id="player" controls autoplay></video>
   </div>
 
   <script>
-    async function streamMedia() {
+    function playVideo() {
       const url = document.getElementById('url').value;
       const status = document.getElementById('status');
-      const videoEl = document.getElementById('video-player');
-      const iframeEl = document.getElementById('iframe-player');
+      const player = document.getElementById('player');
 
       if (!url) return;
 
-      status.innerText = 'Extracting media stream...';
-      videoEl.style.display = 'none';
-      iframeEl.style.display = 'none';
-      videoEl.src = '';
-      iframeEl.src = '';
+      status.innerText = 'Connecting to private proxy stream...';
+      
+      // Feed the local Railway endpoint directly as the video source
+      const proxyUrl = `/proxy-video?url=${encodeURIComponent(url)}`;
+      player.src = proxyUrl;
+      player.load();
+      
+      player.onloadeddata = () => {
+        status.innerText = 'Playing stream from local host...';
+      };
 
-      try {
-        const response = await fetch(`/fetch-stream?url=${encodeURIComponent(url)}`);
-        const data = await response.json();
-
-        if (data.status === 'success' && data.streamUrl) {
-          status.innerText = 'Playing stream...';
-          videoEl.style.display = 'block';
-          videoEl.src = data.streamUrl;
-          videoEl.play();
-        } else if (data.status === 'fallback' && data.embedUrl) {
-          status.innerText = 'Playing via embedded stream...';
-          iframeEl.style.display = 'block';
-          iframeEl.src = data.embedUrl;
-        } else {
-          status.innerText = 'Failed to load video.';
-        }
-      } catch (err) {
-        console.error(err);
-        status.innerText = 'Connection error.';
-      }
+      player.onerror = () => {
+        status.innerText = 'Failed to load video stream. Try another link.';
+      };
     }
   </script>
 
