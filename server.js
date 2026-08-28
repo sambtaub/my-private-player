@@ -9,54 +9,64 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Mirror endpoints to fetch clean media sources
-const MIRRORS = [
+// Primary Piped & Invidious instances
+const API_NODES = [
+    'https://pipedapi.kavin.rocks',
+    'https://api.piped.privacydev.net',
     'https://inv.tux.pizza',
-    'https://invidious.nerdvpn.de',
-    'https://vid.puffyan.us'
+    'https://invidious.nerdvpn.de'
 ];
 
-app.get('/proxy-stream', async (req, res) => {
+app.get('/resolve-video', async (req, res) => {
     const videoUrl = req.query.url;
-    if (!videoUrl) return res.status(400).send('URL required');
+    if (!videoUrl) return res.status(400).json({ error: 'URL required' });
 
+    // Extract 11-character Video ID
     const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
-    if (!match) return res.status(400).send('Invalid YouTube URL');
+    if (!match) return res.status(400).json({ error: 'Invalid YouTube URL' });
 
     const videoId = match[1];
 
-    for (const mirror of MIRRORS) {
+    // Attempt direct video stream resolution
+    for (const node of API_NODES) {
         try {
-            const apiRes = await fetch(`${mirror}/api/v1/videos/${videoId}`);
-            if (!apiRes.ok) continue;
+            const endpoint = node.includes('piped') 
+                ? `${node}/streams/${videoId}` 
+                : `${node}/api/v1/videos/${videoId}`;
 
-            const data = await apiRes.json();
-            const format = data.formatStreams?.find(f => f.container === 'mp4') || data.formatStreams?.[0];
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3000); // 3s timeout per node
 
-            if (format && format.url) {
-                // Fetch raw media stream
-                const mediaResponse = await fetch(format.url);
-                if (!mediaResponse.ok) continue;
+            const response = await fetch(endpoint, { signal: controller.signal });
+            clearTimeout(timeout);
 
-                // Set headers to trick the browser into treating this as local Railway media
-                res.setHeader('Content-Type', 'video/mp4');
-                res.setHeader('Access-Control-Allow-Origin', '*');
+            if (!response.ok) continue;
 
-                // Pipe data chunks directly
-                const reader = mediaResponse.body.getReader();
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    res.write(value);
-                }
-                return res.end();
+            const data = await response.json();
+            
+            // Extract combined stream format
+            let streamUrl = null;
+            if (node.includes('piped') && data.videoStreams) {
+                const stream = data.videoStreams.find(s => s.mimeType?.includes('mp4') && s.quality === '720p') || data.videoStreams[0];
+                streamUrl = stream?.url;
+            } else if (data.formatStreams) {
+                const stream = data.formatStreams.find(f => f.container === 'mp4') || data.formatStreams[0];
+                streamUrl = stream?.url;
+            }
+
+            if (streamUrl) {
+                return res.json({ mode: 'direct', url: streamUrl });
             }
         } catch (e) {
-            console.log(`Mirror failed: ${mirror}`);
+            console.log(`Node failed: ${node}`);
         }
     }
 
-    return res.status(500).send('Unable to bypass player restrictions.');
+    // Fallback mode: Embed player (prevents 500 server crash)
+    return res.json({ 
+        mode: 'embed', 
+        url: `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&modestbranding=1&rel=0` 
+    });
 });
 
 const PORT = process.env.PORT || 8000;
