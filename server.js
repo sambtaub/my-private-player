@@ -9,87 +9,69 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Resilient Piped API mirrors that extract direct media streams
-const PIPED_NODES = [
-    'https://pipedapi.kavin.rocks',
-    'https://api.piped.privacydev.net',
-    'https://pipedapi.mha.fi',
-    'https://piped-api.garudalinux.org'
+// Ignore favicon 404 logs
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
+// Expanded tier of active API instances
+const API_NODES = [
+    { type: 'piped', url: 'https://pipedapi.kavin.rocks' },
+    { type: 'piped', url: 'https://pipedapi.adminforge.de' },
+    { type: 'piped', url: 'https://api.piped.privacydev.net' },
+    { type: 'invidious', url: 'https://inv.tux.pizza' },
+    { type: 'invidious', url: 'https://invidious.nerdvpn.de' }
 ];
 
 app.get('/proxy-video', async (req, res) => {
     const videoUrl = req.query.url;
-    if (!videoUrl) return res.status(400).send('URL required');
+    if (!videoUrl) return res.status(400).json({ status: 'error', message: 'URL required' });
 
+    // Extract 11-char Video ID
     const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
-    if (!match) return res.status(400).send('Invalid YouTube URL');
+    if (!match) return res.status(400).json({ status: 'error', message: 'Invalid YouTube URL' });
 
     const videoId = match[1];
-    let mediaUrl = null;
 
-    // Resolve direct stream URL from Piped nodes
-    for (const node of PIPED_NODES) {
+    // Attempt 1: Fetch direct stream URL from active nodes
+    for (const node of API_NODES) {
         try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3500);
+            const endpoint = node.type === 'piped' 
+                ? `${node.url}/streams/${videoId}` 
+                : `${node.url}/api/v1/videos/${videoId}`;
 
-            const apiRes = await fetch(`${node}/streams/${videoId}`, { signal: controller.signal });
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 2500);
+
+            const apiRes = await fetch(endpoint, { signal: controller.signal });
             clearTimeout(timeout);
 
             if (!apiRes.ok) continue;
 
             const data = await apiRes.json();
-            
-            // Prefer combined MP4 format
-            const stream = data.videoStreams?.find(s => s.mimeType?.includes('mp4') && s.quality === '720p') 
-                        || data.videoStreams?.find(s => s.mimeType?.includes('mp4'))
-                        || data.videoStreams?.[0];
+            let streamUrl = null;
 
-            if (stream && stream.url) {
-                mediaUrl = stream.url;
-                break;
+            if (node.type === 'piped' && data.videoStreams) {
+                const stream = data.videoStreams.find(s => s.mimeType?.includes('mp4') && s.quality === '720p') 
+                            || data.videoStreams.find(s => s.mimeType?.includes('mp4'))
+                            || data.videoStreams[0];
+                streamUrl = stream?.url;
+            } else if (node.type === 'invidious' && data.formatStreams) {
+                const stream = data.formatStreams.find(f => f.container === 'mp4') || data.formatStreams[0];
+                streamUrl = stream?.url;
+            }
+
+            if (streamUrl) {
+                return res.json({ status: 'direct', streamUrl: streamUrl });
             }
         } catch (e) {
-            console.log(`Node failed: ${node}`);
+            console.log(`Node failed: ${node.url}`);
         }
     }
 
-    if (!mediaUrl) {
-        return res.status(502).send('Unable to resolve video stream from active nodes.');
-    }
-
-    try {
-        // Stream the media directly from source to client to prevent Railway 502 memory crashes
-        const videoStream = await fetch(mediaUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-        });
-
-        if (!videoStream.ok) {
-            return res.status(502).send('Upstream video source returned error.');
-        }
-
-        // Set local Railway domain headers so browser permits playback
-        res.setHeader('Content-Type', 'video/mp4');
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        if (videoStream.headers.get('content-length')) {
-            res.setHeader('Content-Length', videoStream.headers.get('content-length'));
-        }
-
-        // Pipe stream chunks smoothly without memory accumulation
-        const reader = videoStream.body.getReader();
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
-        }
-        res.end();
-
-    } catch (err) {
-        console.error('Piping error:', err);
-        if (!res.headersSent) {
-            res.status(502).send('Stream relay failed.');
-        }
-    }
+    // Attempt 2: Fall back to non-blocking Embed configuration (prevents 502 crash)
+    return res.json({
+        status: 'embed',
+        embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&modestbranding=1&rel=0`
+    });
 });
 
 const PORT = process.env.PORT || 8000;
