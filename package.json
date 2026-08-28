@@ -6,7 +6,7 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "yt-dlp-exec": "^2.5.9"
+    "@distube/ytdl-core": "^4.15.9",
+    "express": "^4.19.2"
   }
 }
