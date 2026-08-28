@@ -10,6 +10,7 @@
     .controls { margin-bottom: 20px; }
     input { width: 60%; max-width: 500px; padding: 12px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #fff; font-size: 14px; }
     button { padding: 12px 20px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; margin-left: 5px; }
+    button:hover { background: #1d4ed8; }
     #player-wrapper { width: 90%; max-width: 850px; margin: 0 auto; background: #000; border-radius: 8px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
     video { width: 100%; height: auto; display: block; background: #000; }
     #status { margin: 12px 0; color: #a1a1aa; font-size: 14px; }
@@ -40,18 +41,18 @@
 
       if (!url) return;
 
-      status.innerText = 'Extracting media stream...';
+      status.innerText = 'Extracting media stream locally...';
 
       if (hlsInstance) {
         hlsInstance.destroy();
       }
 
       try {
-        const response = await fetch(`/get-hls-manifest?url=${encodeURIComponent(url)}`);
+        const response = await fetch(`/get-stream?url=${encodeURIComponent(url)}`);
         const data = await response.json();
 
         if (data.status === 'success' && data.url) {
-          status.innerText = 'Playing video stream...';
+          status.innerText = 'Playing stream...';
           
           if (data.url.includes('.m3u8') && Hls.isSupported()) {
             hlsInstance = new Hls();
@@ -65,7 +66,7 @@
             video.play();
           }
         } else {
-          status.innerText = 'All API nodes failed. Please try a different video link.';
+          status.innerText = data.message || 'Unable to extract stream.';
         }
       } catch (err) {
         console.error(err);
