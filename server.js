@@ -1,15 +1,23 @@
 const express = require('express');
-const { Innertube, CustomEvent } = require('youtubei.js');
+const { Innertube, UniversalCache } = require('youtubei.js');
 const path = require('path');
 const app = express();
 
 let youtube;
 
-// Initialize YouTube parser client
-Innertube.create().then((yt) => {
-    youtube = yt;
-    console.log('YouTube API initialized successfully');
-}).catch(err => console.error('Init Error:', err));
+// Initialize YouTube client with session caching enabled
+async function initYouTube() {
+    try {
+        youtube = await Innertube.create({
+            cache: new UniversalCache(false),
+            generate_session_locally: true
+        });
+        console.log('YouTube API initialized');
+    } catch (err) {
+        console.error('Init Error:', err);
+    }
+}
+initYouTube();
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -23,34 +31,35 @@ app.get('/stream', async (req, res) => {
     if (!videoUrl) return res.status(400).send('URL is required');
 
     if (!youtube) {
-        return res.status(503).send('Server is starting up, try again in a moment.');
+        return res.status(503).send('Server is starting up, please try again in a few seconds.');
     }
 
     try {
-        // Extract Video ID from URL
+        // Extract 11-character Video ID
         const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
         if (!match) return res.status(400).send('Invalid YouTube URL');
 
         const videoId = match[1];
 
-        res.setHeader('Content-Type', 'video/mp4');
-
-        // Fetch stream using web client signatures
+        // Fetch streaming data specifically requesting combined formats (iOS client type avoids cloud blocks)
         const stream = await youtube.download(videoId, {
             type: 'video+audio',
-            quality: 'best'
+            quality: 'best',
+            client: 'IOS'
         });
 
-        // Pipe web stream to Express response
+        res.setHeader('Content-Type', 'video/mp4');
+
+        // Read and send stream chunks cleanly
         for await (const chunk of stream) {
             res.write(chunk);
         }
         res.end();
 
     } catch (err) {
-        console.error('Stream Error:', err);
+        console.error('Stream Error Detail:', err);
         if (!res.headersSent) {
-            res.status(500).send('Failed to stream video source.');
+            res.status(500).send('Failed to stream video. The video may be region-restricted or unavailable.');
         }
     }
 });
