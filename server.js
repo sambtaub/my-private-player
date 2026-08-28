@@ -1,6 +1,6 @@
 const express = require('express');
 const path = require('path');
-const youtubedl = require('yt-dlp-exec');
+const ytdl = require('@distube/ytdl-core');
 const app = express();
 
 app.use(express.json());
@@ -14,40 +14,39 @@ app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 app.get('/get-stream', async (req, res) => {
     const videoUrl = req.query.url;
-    if (!videoUrl) return res.status(400).json({ error: 'URL required' });
+    if (!videoUrl || !ytdl.validateURL(videoUrl)) {
+        return res.json({ status: 'error', message: 'Invalid YouTube URL' });
+    }
 
     try {
-        // Run local yt-dlp binary to extract raw stream manifest & formats directly
-        const output = await youtubedl(videoUrl, {
-            dumpSingleJson: true,
-            noCheckCertificates: true,
-            noWarnings: true,
-            preferFreeFormats: true,
-            youtubeSkipDashManifest: false
+        // Extract stream info directly using JavaScript
+        const info = await ytdl.getInfo(videoUrl, {
+            requestOptions: {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            }
         });
 
-        // 1. Prefer HLS (.m3u8) format to bypass MP4 browser blocks
-        let hlsUrl = output.manifest_url;
-        
-        // 2. Fallback to direct video stream if HLS manifest isn't explicit
-        if (!hlsUrl && output.formats) {
-            const format = output.formats.find(f => f.manifest_url || (f.ext === 'mp4' && f.acodec !== 'none' && f.vcodec !== 'none')) 
-                        || output.formats[0];
-            hlsUrl = format.manifest_url || format.url;
+        // 1. Check for HLS manifest URL (bypasses MP4 blocks)
+        let streamUrl = info.formats.find(f => f.isHLS)?.url;
+
+        // 2. Fallback to direct video/audio combined format
+        if (!streamUrl) {
+            const format = ytdl.chooseFormat(info.formats, { quality: 'highestvideo', filter: 'audioandvideo' });
+            streamUrl = format?.url;
         }
 
-        if (hlsUrl) {
-            return res.json({ status: 'success', url: hlsUrl });
+        if (streamUrl) {
+            return res.json({ status: 'success', url: streamUrl });
         } else {
-            return res.json({ status: 'error', message: 'No playable stream format found.' });
+            return res.json({ status: 'error', message: 'No playable stream format resolved.' });
         }
     } catch (err) {
-        console.error('yt-dlp extraction error:', err.message);
-        
-        // Fail-safe response to prevent 502 server crashes
+        console.error('ytdl extraction error:', err.message);
         return res.json({ 
             status: 'error', 
-            message: 'Failed to extract video stream. YouTube may be throttling this video ID.' 
+            message: 'Extraction failed. YouTube may be throttling this video ID.' 
         });
     }
 });
