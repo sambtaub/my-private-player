@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Private Streamer</title>
   <style>
-    body { font-family: Arial, sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; margin: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f0f; color: #fff; text-align: center; margin: 0; padding: 20px; }
     .controls { margin-bottom: 20px; }
-    input { width: 60%; max-width: 500px; padding: 12px; border-radius: 4px; border: 1px solid #333; background: #222; color: #fff; font-size: 14px; }
-    button { padding: 12px 20px; background: #28a745; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; margin-left: 5px; }
-    #player-container { width: 90%; max-width: 850px; margin: 20px auto; }
-    video { width: 100%; height: auto; border-radius: 8px; background: #000; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-    #status { margin-top: 10px; color: #aaa; font-size: 14px; }
+    input { width: 60%; max-width: 500px; padding: 12px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #fff; font-size: 14px; }
+    button { padding: 12px 20px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; margin-left: 5px; }
+    button:hover { background: #1d4ed8; }
+    #player-wrapper { width: 90%; max-width: 850px; height: 480px; margin: 0 auto; background: #000; border-radius: 8px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    video, iframe { width: 100%; height: 100%; border: none; }
+    #status { margin: 12px 0; color: #a1a1aa; font-size: 14px; }
   </style>
 </head>
 <body>
@@ -25,32 +26,48 @@
 
   <div id="status"></div>
 
-  <div id="player-container">
-    <video id="player" controls autoplay></video>
+  <div id="player-wrapper">
+    <video id="video-element" controls autoplay style="display: none;"></video>
+    <iframe id="iframe-element" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="display: none;"></iframe>
   </div>
 
   <script>
-    function playVideo() {
-      const url = document.getElementById('url').value;
+    async function playVideo() {
+      const url = document.getElementById('url').value.trim();
       const status = document.getElementById('status');
-      const player = document.getElementById('player');
+      const videoEl = document.getElementById('video-element');
+      const iframeEl = document.getElementById('iframe-element');
 
       if (!url) return;
 
-      status.innerText = 'Connecting to private proxy stream...';
+      status.innerText = 'Resolving media source...';
       
-      // Feed the local Railway endpoint directly as the video source
-      const proxyUrl = `/proxy-video?url=${encodeURIComponent(url)}`;
-      player.src = proxyUrl;
-      player.load();
-      
-      player.onloadeddata = () => {
-        status.innerText = 'Playing stream from local host...';
-      };
+      // Reset player states
+      videoEl.style.display = 'none';
+      iframeEl.style.display = 'none';
+      videoEl.src = '';
+      iframeEl.src = '';
 
-      player.onerror = () => {
-        status.innerText = 'Failed to load video stream. Try another link.';
-      };
+      try {
+        const response = await fetch(`/proxy-video?url=${encodeURIComponent(url)}`);
+        const data = await response.json();
+
+        if (data.status === 'direct' && data.streamUrl) {
+          status.innerText = 'Playing direct stream...';
+          videoEl.style.display = 'block';
+          videoEl.src = data.streamUrl;
+          videoEl.play();
+        } else if (data.status === 'embed' && data.embedUrl) {
+          status.innerText = 'Playing via embedded proxy...';
+          iframeEl.style.display = 'block';
+          iframeEl.src = data.embedUrl;
+        } else {
+          status.innerText = 'Could not resolve media source.';
+        }
+      } catch (err) {
+        console.error(err);
+        status.innerText = 'Network error while fetching stream info.';
+      }
     }
   </script>
 
