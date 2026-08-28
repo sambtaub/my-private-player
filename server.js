@@ -9,62 +9,87 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Active Cobalt API endpoints for video stream resolution
-const COBALT_INSTANCES = [
-    'https://api.cobalt.tools',
-    'https://cobalt-api.kwiats.com',
-    'https://cobalt.canine.tools'
+// Resilient Piped API mirrors that extract direct media streams
+const PIPED_NODES = [
+    'https://pipedapi.kavin.rocks',
+    'https://api.piped.privacydev.net',
+    'https://pipedapi.mha.fi',
+    'https://piped-api.garudalinux.org'
 ];
 
-app.get('/fetch-stream', async (req, res) => {
+app.get('/proxy-video', async (req, res) => {
     const videoUrl = req.query.url;
-    if (!videoUrl) return res.status(400).json({ error: 'URL required' });
+    if (!videoUrl) return res.status(400).send('URL required');
 
-    for (const instance of COBALT_INSTANCES) {
+    const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
+    if (!match) return res.status(400).send('Invalid YouTube URL');
+
+    const videoId = match[1];
+    let mediaUrl = null;
+
+    // Resolve direct stream URL from Piped nodes
+    for (const node of PIPED_NODES) {
         try {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 4000);
+            const timeout = setTimeout(() => controller.abort(), 3500);
 
-            const response = await fetch(`${instance}/`, {
-                method: 'POST',
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    url: videoUrl,
-                    vQuality: '720'
-                }),
-                signal: controller.signal
-            });
-
+            const apiRes = await fetch(`${node}/streams/${videoId}`, { signal: controller.signal });
             clearTimeout(timeout);
 
-            if (!response.ok) continue;
+            if (!apiRes.ok) continue;
 
-            const data = await response.json();
+            const data = await apiRes.json();
+            
+            // Prefer combined MP4 format
+            const stream = data.videoStreams?.find(s => s.mimeType?.includes('mp4') && s.quality === '720p') 
+                        || data.videoStreams?.find(s => s.mimeType?.includes('mp4'))
+                        || data.videoStreams?.[0];
 
-            // Handle direct video stream URL
-            if (data.status === 'stream' || data.status === 'redirect') {
-                return res.json({ status: 'success', streamUrl: data.url });
-            } else if (data.status === 'picker' && data.picker && data.picker.length > 0) {
-                return res.json({ status: 'success', streamUrl: data.picker[0].url });
+            if (stream && stream.url) {
+                mediaUrl = stream.url;
+                break;
             }
         } catch (e) {
-            console.log(`Cobalt node failed: ${instance}`);
+            console.log(`Node failed: ${node}`);
         }
     }
 
-    // Fallback response if all API nodes fail
-    const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
-    if (match) {
-        return res.json({ 
-            status: 'fallback', 
-            embedUrl: `https://www.youtube-nocookie.com/embed/${match[1]}?autoplay=1` 
-        });
+    if (!mediaUrl) {
+        return res.status(502).send('Unable to resolve video stream from active nodes.');
     }
 
-    return res.status(502).json({ error: 'Unable to bypass restrictions' });
+    try {
+        // Stream the media directly from source to client to prevent Railway 502 memory crashes
+        const videoStream = await fetch(mediaUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+        });
+
+        if (!videoStream.ok) {
+            return res.status(502).send('Upstream video source returned error.');
+        }
+
+        // Set local Railway domain headers so browser permits playback
+        res.setHeader('Content-Type', 'video/mp4');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        if (videoStream.headers.get('content-length')) {
+            res.setHeader('Content-Length', videoStream.headers.get('content-length'));
+        }
+
+        // Pipe stream chunks smoothly without memory accumulation
+        const reader = videoStream.body.getReader();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            res.write(value);
+        }
+        res.end();
+
+    } catch (err) {
+        console.error('Piping error:', err);
+        if (!res.headersSent) {
+            res.status(502).send('Stream relay failed.');
+        }
+    }
 });
 
 const PORT = process.env.PORT || 8000;
