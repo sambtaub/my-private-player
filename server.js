@@ -9,67 +9,63 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Primary public API instances for raw stream fetching
-const ENDPOINTS = [
-    'https://pipedapi.kavin.rocks/streams/',
-    'https://api.piped.privacydev.net/streams/',
-    'https://inv.tux.pizza/api/v1/videos/'
+// Active Cobalt API endpoints for video stream resolution
+const COBALT_INSTANCES = [
+    'https://api.cobalt.tools',
+    'https://cobalt-api.kwiats.com',
+    'https://cobalt.canine.tools'
 ];
 
 app.get('/fetch-stream', async (req, res) => {
     const videoUrl = req.query.url;
-    if (!videoUrl) return res.status(400).send('URL required');
+    if (!videoUrl) return res.status(400).json({ error: 'URL required' });
 
-    const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
-    if (!match) return res.status(400).send('Invalid URL');
-
-    const videoId = match[1];
-
-    for (const base of ENDPOINTS) {
+    for (const instance of COBALT_INSTANCES) {
         try {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 4000);
 
-            const apiRes = await fetch(`${base}${videoId}`, { signal: controller.signal });
+            const response = await fetch(`${instance}/`, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    url: videoUrl,
+                    vQuality: '720'
+                }),
+                signal: controller.signal
+            });
+
             clearTimeout(timeout);
 
-            if (!apiRes.ok) continue;
+            if (!response.ok) continue;
 
-            const data = await apiRes.json();
-            let rawUrl = null;
+            const data = await response.json();
 
-            if (data.videoStreams) {
-                // Find compatible combined MP4 stream
-                const stream = data.videoStreams.find(s => s.mimeType?.includes('mp4') && s.quality === '720p') || data.videoStreams[0];
-                rawUrl = stream?.url;
-            } else if (data.formatStreams) {
-                const stream = data.formatStreams.find(f => f.container === 'mp4') || data.formatStreams[0];
-                rawUrl = stream?.url;
-            }
-
-            if (rawUrl) {
-                // Fetch the actual media binary and relay it
-                const mediaRes = await fetch(rawUrl);
-                if (!mediaRes.ok) continue;
-
-                res.setHeader('Content-Type', 'video/mp4');
-                res.setHeader('Access-Control-Allow-Origin', '*');
-
-                const reader = mediaRes.body.getReader();
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    res.write(value);
-                }
-                return res.end();
+            // Handle direct video stream URL
+            if (data.status === 'stream' || data.status === 'redirect') {
+                return res.json({ status: 'success', streamUrl: data.url });
+            } else if (data.status === 'picker' && data.picker && data.picker.length > 0) {
+                return res.json({ status: 'success', streamUrl: data.picker[0].url });
             }
         } catch (e) {
-            console.log(`Endpoint failed: ${base}`);
+            console.log(`Cobalt node failed: ${instance}`);
         }
     }
 
-    return res.status(502).send('Unable to bypass media restrictions.');
+    // Fallback response if all API nodes fail
+    const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
+    if (match) {
+        return res.json({ 
+            status: 'fallback', 
+            embedUrl: `https://www.youtube-nocookie.com/embed/${match[1]}?autoplay=1` 
+        });
+    }
+
+    return res.status(502).json({ error: 'Unable to bypass restrictions' });
 });
 
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
