@@ -19,21 +19,20 @@ app.get('/get-stream', async (req, res) => {
     }
 
     try {
-        // Extract stream info directly using JavaScript
+        // Fetch metadata using mobile/TV clients to bypass datacenter IP bot detection
         const info = await ytdl.getInfo(videoUrl, {
-            requestOptions: {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
-            }
+            playerClients: ['ANDROID', 'IOS', 'TV', 'WEB_EMBEDDED']
         });
 
-        // 1. Check for HLS manifest URL (bypasses MP4 blocks)
+        // 1. Prefer HLS (.m3u8) format (bypasses browser MP4 filters)
         let streamUrl = info.formats.find(f => f.isHLS)?.url;
 
-        // 2. Fallback to direct video/audio combined format
+        // 2. Fallback to combined audio/video streams
         if (!streamUrl) {
-            const format = ytdl.chooseFormat(info.formats, { quality: 'highestvideo', filter: 'audioandvideo' });
+            const format = ytdl.chooseFormat(info.formats, { 
+                quality: 'highestvideo', 
+                filter: 'audioandvideo' 
+            });
             streamUrl = format?.url;
         }
 
@@ -46,7 +45,7 @@ app.get('/get-stream', async (req, res) => {
         console.error('ytdl extraction error:', err.message);
         return res.json({ 
             status: 'error', 
-            message: 'Extraction failed. YouTube may be throttling this video ID.' 
+            message: 'YouTube anti-bot challenge active on server IP. Retry in a few moments.' 
         });
     }
 });
