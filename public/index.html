@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bypass Player</title>
+  <title>Bypass Video Player</title>
   <style>
     body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #fff; text-align: center; margin: 0; padding: 20px; }
     .controls { margin: 20px 0; }
     input { width: 60%; max-width: 500px; padding: 12px; border-radius: 6px; border: 1px solid #333; background: #1f1f1f; color: #fff; }
     button { padding: 12px 24px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
-    #player-container { width: 90%; max-width: 800px; margin: 0 auto; }
-    video { width: 100%; height: auto; border-radius: 8px; background: #000; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+    #player-container { width: 90%; max-width: 800px; height: 450px; margin: 0 auto; background: #000; border-radius: 8px; overflow: hidden; }
+    video, iframe { width: 100%; height: 100%; border: none; }
     #status { margin: 10px 0; color: #9ca3af; font-size: 14px; }
   </style>
 </head>
@@ -20,51 +20,50 @@
   
   <div class="controls">
     <input type="text" id="url" placeholder="Paste YouTube Link...">
-    <button onclick="streamMedia()">Load</button>
+    <button onclick="streamMedia()">Play</button>
   </div>
 
   <div id="status"></div>
 
   <div id="player-container">
-    <video id="player" controls autoplay></video>
+    <video id="video-player" controls autoplay style="display: none;"></video>
+    <iframe id="iframe-player" allow="autoplay; encrypted-media" allowfullscreen style="display: none;"></iframe>
   </div>
 
   <script>
-    let currentBlobUrl = null;
-
     async function streamMedia() {
       const url = document.getElementById('url').value;
       const status = document.getElementById('status');
-      const player = document.getElementById('player');
+      const videoEl = document.getElementById('video-player');
+      const iframeEl = document.getElementById('iframe-player');
 
       if (!url) return;
 
-      // Revoke previous blob memory to prevent leaks
-      if (currentBlobUrl) {
-        URL.revokeObjectURL(currentBlobUrl);
-      }
-
-      status.innerText = 'Creating local stream buffer...';
-      player.src = '';
+      status.innerText = 'Extracting media stream...';
+      videoEl.style.display = 'none';
+      iframeEl.style.display = 'none';
+      videoEl.src = '';
+      iframeEl.src = '';
 
       try {
         const response = await fetch(`/fetch-stream?url=${encodeURIComponent(url)}`);
-        
-        if (!response.ok) {
-          throw new Error(`Server returned HTTP ${response.status}`);
+        const data = await response.json();
+
+        if (data.status === 'success' && data.streamUrl) {
+          status.innerText = 'Playing stream...';
+          videoEl.style.display = 'block';
+          videoEl.src = data.streamUrl;
+          videoEl.play();
+        } else if (data.status === 'fallback' && data.embedUrl) {
+          status.innerText = 'Playing via embedded stream...';
+          iframeEl.style.display = 'block';
+          iframeEl.src = data.embedUrl;
+        } else {
+          status.innerText = 'Failed to load video.';
         }
-
-        // Convert the stream into a local browser Blob URL
-        const blob = await response.blob();
-        currentBlobUrl = URL.createObjectURL(blob);
-
-        status.innerText = 'Playing...';
-        player.src = currentBlobUrl;
-        player.play();
-
       } catch (err) {
         console.error(err);
-        status.innerText = 'Network policy blocked connection or stream failed.';
+        status.innerText = 'Connection error.';
       }
     }
   </script>
