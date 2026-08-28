@@ -11,78 +11,50 @@ app.get('/', (req, res) => {
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
-// Redundant Cobalt & Piped instance list
-const API_NODES = [
-    'https://api.cobalt.tools',
-    'https://pipedapi.kavin.rocks',
-    'https://api.piped.privacydev.net'
+// Primary working HLS extraction relay nodes
+const INVIDIOUS_NODES = [
+    'https://inv.tux.pizza',
+    'https://invidious.nerdvpn.de',
+    'https://invidious.drgns.space',
+    'https://vid.puffyan.us'
 ];
 
-app.get('/stream-pipe', async (req, res) => {
+app.get('/get-hls-manifest', async (req, res) => {
     const videoUrl = req.query.url;
-    if (!videoUrl) return res.status(400).send('URL required');
+    if (!videoUrl) return res.status(400).json({ error: 'URL required' });
 
     const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
-    if (!match) return res.status(400).send('Invalid YouTube URL');
+    if (!match) return res.status(400).json({ error: 'Invalid YouTube URL' });
 
     const videoId = match[1];
-    let directStreamUrl = null;
 
-    // Phase 1: Try resolving raw media stream URL via Cobalt API
-    try {
-        const cobaltRes = await fetch('https://api.cobalt.tools/', {
-            method: 'POST',
-            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: videoUrl, vQuality: '720' })
-        });
-        if (cobaltRes.ok) {
-            const data = await cobaltRes.json();
-            if (data.url) directStreamUrl = data.url;
-        }
-    } catch (e) {}
+    for (const node of INVIDIOUS_NODES) {
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3000);
 
-    // Phase 2: Fallback to Piped API if Cobalt fails
-    if (!directStreamUrl) {
-        for (const node of API_NODES.slice(1)) {
-            try {
-                const pipedRes = await fetch(`${node}/streams/${videoId}`);
-                if (!pipedRes.ok) continue;
-                const data = await pipedRes.json();
-                const stream = data.videoStreams?.find(s => s.mimeType?.includes('mp4')) || data.videoStreams?.[0];
-                if (stream?.url) {
-                    directStreamUrl = stream.url;
-                    break;
-                }
-            } catch (e) {}
+            const apiRes = await fetch(`${node}/api/v1/videos/${videoId}`, { signal: controller.signal });
+            clearTimeout(timeout);
+
+            if (!apiRes.ok) continue;
+
+            const data = await apiRes.json();
+            
+            // Extract HLS manifest URL or fallback direct stream URL
+            if (data.hlsUrl) {
+                return res.json({ status: 'hls', url: data.hlsUrl });
+            } else if (data.formatStreams && data.formatStreams.length > 0) {
+                // If HLS isn't present, return the direct stream payload
+                const stream = data.formatStreams.find(f => f.container === 'mp4') || data.formatStreams[0];
+                return res.json({ status: 'direct', url: stream.url });
+            }
+        } catch (e) {
+            console.log(`Failed node: ${node}`);
         }
     }
 
-    if (!directStreamUrl) {
-        return res.status(502).send('Failed to locate stream source.');
-    }
-
-    // Phase 3: Proxy media binary directly through Railway (Same-Origin Pipe)
-    try {
-        const mediaRes = await fetch(directStreamUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-        });
-
-        if (!mediaRes.ok) return res.status(502).send('Upstream video fetch failed');
-
-        res.setHeader('Content-Type', 'video/mp4');
-        res.setHeader('Access-Control-Allow-Origin', '*');
-
-        // Stream byte chunks directly to browser without buffering entire file in memory
-        const reader = mediaRes.body.getReader();
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
-        }
-        res.end();
-    } catch (err) {
-        if (!res.headersSent) res.status(500).send('Streaming error');
-    }
+    // Fail-safe response to prevent 502 server crash
+    return res.status(200).json({ status: 'error', message: 'Nodes unreachable' });
 });
 
 const PORT = process.env.PORT || 8000;
