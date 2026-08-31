@@ -1,6 +1,8 @@
 const express = require('express');
 const path = require('path');
 const ytdl = require('@distube/ytdl-core');
+const { generate } = require('youtube-po-token-generator');
+
 const app = express();
 
 app.use(express.json());
@@ -12,6 +14,23 @@ app.get('/', (req, res) => {
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
+// Cached PO Token & Visitor Data
+let poTokenData = null;
+
+async function refreshTokenData() {
+    try {
+        console.log('Generating server-side PO Token...');
+        poTokenData = await generate();
+        console.log('Successfully generated PO Token & Visitor Data.');
+    } catch (err) {
+        console.error('Failed to generate PO Token:', err.message);
+    }
+}
+
+// Generate initial token on boot and refresh every 3 hours
+refreshTokenData();
+setInterval(refreshTokenData, 3 * 60 * 60 * 1000);
+
 app.get('/get-stream', async (req, res) => {
     const videoUrl = req.query.url;
     if (!videoUrl || !ytdl.validateURL(videoUrl)) {
@@ -19,15 +38,22 @@ app.get('/get-stream', async (req, res) => {
     }
 
     try {
-        // Fetch metadata using mobile/TV clients to bypass datacenter IP bot detection
-        const info = await ytdl.getInfo(videoUrl, {
-            playerClients: ['ANDROID', 'IOS', 'TV', 'WEB_EMBEDDED']
-        });
+        // Build ytdl options with server-side attestation tokens
+        const options = {
+            playerClients: ['WEB_EMBEDDED', 'IOS', 'ANDROID']
+        };
 
-        // 1. Prefer HLS (.m3u8) format (bypasses browser MP4 filters)
+        if (poTokenData && poTokenData.poToken && poTokenData.visitorData) {
+            options.poToken = poTokenData.poToken;
+            options.visitorData = poTokenData.visitorData;
+        }
+
+        const info = await ytdl.getInfo(videoUrl, options);
+
+        // 1. Prefer HLS (.m3u8) streams to bypass browser MP4 filters
         let streamUrl = info.formats.find(f => f.isHLS)?.url;
 
-        // 2. Fallback to combined audio/video streams
+        // 2. Fallback to direct video/audio combined streams
         if (!streamUrl) {
             const format = ytdl.chooseFormat(info.formats, { 
                 quality: 'highestvideo', 
@@ -43,9 +69,13 @@ app.get('/get-stream', async (req, res) => {
         }
     } catch (err) {
         console.error('ytdl extraction error:', err.message);
+        
+        // Attempt immediate token refresh on failure
+        refreshTokenData();
+
         return res.json({ 
             status: 'error', 
-            message: 'YouTube anti-bot challenge active on server IP. Retry in a few moments.' 
+            message: 'Stream extraction failed. Re-authenticating token, try again in 5 seconds.' 
         });
     }
 });
