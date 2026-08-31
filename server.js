@@ -1,7 +1,5 @@
 const express = require('express');
 const path = require('path');
-const ytdl = require('@distube/ytdl-core');
-
 const app = express();
 
 app.use(express.json());
@@ -13,45 +11,65 @@ app.get('/', (req, res) => {
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
+// Redundant list of open API mirrors
+const INSTANCES = [
+    { type: 'piped', url: 'https://pipedapi.kavin.rocks' },
+    { type: 'piped', url: 'https://api.piped.privacydev.net' },
+    { type: 'invidious', url: 'https://invidious.nerdvpn.de' },
+    { type: 'invidious', url: 'https://inv.riverside.rocks' }
+];
+
 app.get('/get-stream', async (req, res) => {
     const videoUrl = req.query.url;
+    if (!videoUrl) return res.json({ status: 'error', message: 'URL required.' });
 
-    if (!videoUrl || !ytdl.validateURL(videoUrl)) {
-        return res.json({ status: 'error', message: 'Invalid or missing YouTube URL.' });
+    const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
+    if (!match) return res.json({ status: 'error', message: 'Invalid YouTube URL.' });
+
+    const videoId = match[1];
+
+    for (const node of INSTANCES) {
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3500);
+
+            let mediaUrl = null;
+
+            if (node.type === 'piped') {
+                const apiRes = await fetch(`${node.url}/streams/${videoId}`, { signal: controller.signal });
+                clearTimeout(timeout);
+                if (apiRes.ok) {
+                    const data = await apiRes.json();
+                    if (data.hls) {
+                        mediaUrl = data.hls;
+                    } else if (data.videoStreams && data.videoStreams.length > 0) {
+                        const stream = data.videoStreams.find(s => s.mimeType?.includes('mp4')) || data.videoStreams[0];
+                        mediaUrl = stream?.url;
+                    }
+                }
+            } else if (node.type === 'invidious') {
+                const apiRes = await fetch(`${node.url}/api/v1/videos/${videoId}`, { signal: controller.signal });
+                clearTimeout(timeout);
+                if (apiRes.ok) {
+                    const data = await apiRes.json();
+                    if (data.formatStreams && data.formatStreams.length > 0) {
+                        mediaUrl = data.formatStreams[data.formatStreams.length - 1].url;
+                    }
+                }
+            }
+
+            if (mediaUrl) {
+                return res.json({ status: 'success', url: mediaUrl });
+            }
+        } catch (e) {
+            console.log(`Node failed: ${node.url}`);
+        }
     }
 
-    try {
-        // Query mobile and TV InnerTube clients to bypass desktop web bot enforcement
-        const info = await ytdl.getInfo(videoUrl, {
-            playerClients: ['IOS', 'ANDROID', 'TV', 'WEB_EMBEDDED']
-        });
-
-        // 1. Prefer HLS (.m3u8) manifests (bypasses direct MP4 playback restrictions)
-        let streamUrl = info.formats.find(f => f.isHLS)?.url;
-
-        // 2. Fallback to combined video & audio streams
-        if (!streamUrl) {
-            const format = ytdl.chooseFormat(info.formats, {
-                quality: 'highestvideo',
-                filter: 'audioandvideo'
-            });
-            streamUrl = format?.url;
-        }
-
-        if (streamUrl) {
-            return res.json({ status: 'success', url: streamUrl });
-        } else {
-            return res.json({ status: 'error', message: 'No playable stream format could be extracted.' });
-        }
-    } catch (err) {
-        console.error('ytdl-core extraction error:', err.message);
-
-        // Fail safely with JSON rather than crashing the Express process
-        return res.json({
-            status: 'error',
-            message: 'Server IP block detected by YouTube. Try another video link.'
-        });
-    }
+    return res.json({ 
+        status: 'error', 
+        message: 'All API proxy nodes failed. Try again in a few moments.' 
+    });
 });
 
 const PORT = process.env.PORT || 8000;
