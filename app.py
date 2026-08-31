@@ -1,18 +1,17 @@
-import re
+import os
 import requests
 from flask import Flask, request, Response, render_template_string, jsonify
 import yt_dlp
 
 app = Flask(__name__)
 
-# Basic HTML frontend bundled directly into Flask
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bypass Video Proxy</title>
+  <title>Private Stream Proxy</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f0f0f; color: #fff; text-align: center; margin: 0; padding: 40px 20px; }
@@ -53,8 +52,6 @@ HTML_TEMPLATE = """
       }
 
       status.innerText = 'Resolving media via server proxy...';
-
-      // Load media through your own Flask proxy endpoint
       const proxyStreamUrl = `/stream?url=${encodeURIComponent(urlInput)}`;
       video.src = proxyStreamUrl;
       
@@ -80,9 +77,8 @@ def index():
 def stream():
     video_url = request.args.get('url')
     if not video_url:
-        return jsonify({"error": "URL parameters missing"}), 400
+        return jsonify({"error": "URL parameter missing"}), 400
 
-    # Configure yt-dlp to extract direct video format URLs
     ydl_opts = {
         'format': 'best[ext=mp4]/best',
         'quiet': True,
@@ -95,7 +91,6 @@ def stream():
             target_url = info.get('url')
             
             if not target_url and 'formats' in info:
-                # Fallback format selection
                 for f in info['formats']:
                     if f.get('vcodec') != 'none' and f.get('acodec') != 'none':
                         target_url = f.get('url')
@@ -108,13 +103,11 @@ def stream():
     if not target_url:
         return jsonify({"error": "No playable stream URL found"}), 404
 
-    # Relay HTTP range headers for video seeking
     headers = {}
     range_header = request.headers.get('Range')
     if range_header:
         headers['Range'] = range_header
 
-    # Request stream chunk from upstream
     upstream_response = requests.get(target_url, headers=headers, stream=True)
 
     def generate():
@@ -122,7 +115,6 @@ def stream():
             if chunk:
                 yield chunk
 
-    # Return streamed response directly to the user's browser
     response_headers = {}
     for header_name in ['Content-Type', 'Content-Length', 'Content-Range', 'Accept-Ranges']:
         if header_name in upstream_response.headers:
@@ -136,4 +128,5 @@ def stream():
     )
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000)
+    port = int(os.environ.get('PORT', 8000))
+    app.run(host='0.0.0.0', port=port)
