@@ -6,14 +6,78 @@
   <title>Private Streamer</title>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f0f; color: #fff; text-align: center; margin: 0; padding: 20px; }
-    .controls { margin-bottom: 20px; }
-    input { width: 60%; max-width: 500px; padding: 12px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #fff; font-size: 14px; }
-    button { padding: 12px 20px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; margin-left: 5px; }
-    button:hover { background: #1d4ed8; }
-    #player-wrapper { width: 90%; max-width: 850px; margin: 0 auto; background: #000; border-radius: 8px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-    video { width: 100%; height: auto; display: block; background: #000; }
-    #status { margin: 12px 0; color: #a1a1aa; font-size: 14px; }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0f0f0f;
+      color: #f1f1f1;
+      text-align: center;
+      margin: 0;
+      padding: 40px 20px;
+    }
+    h2 {
+      margin-bottom: 24px;
+      font-weight: 600;
+      letter-spacing: -0.5px;
+    }
+    .controls {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    input[type="text"] {
+      width: 100%;
+      max-width: 500px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: 1px solid #333;
+      background: #1a1a1a;
+      color: #fff;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus {
+      border-color: #2563eb;
+    }
+    button {
+      padding: 12px 24px;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    #status {
+      min-height: 24px;
+      margin: 12px 0 20px;
+      color: #a1a1aa;
+      font-size: 14px;
+    }
+    #player-wrapper {
+      width: 100%;
+      max-width: 850px;
+      margin: 0 auto;
+      background: #000;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7);
+    }
+    video {
+      width: 100%;
+      height: auto;
+      display: block;
+      background: #000;
+    }
   </style>
 </head>
 <body>
@@ -21,11 +85,11 @@
   <h2>Private Video Streamer</h2>
 
   <div class="controls">
-    <input type="text" id="url" placeholder="Paste YouTube link...">
+    <input type="text" id="url" placeholder="Paste YouTube video link..." onkeydown="if(event.key==='Enter') playVideo()">
     <button onclick="playVideo()">Play</button>
   </div>
 
-  <div id="status"></div>
+  <div id="status">Ready</div>
 
   <div id="player-wrapper">
     <video id="player" controls autoplay></video>
@@ -35,16 +99,21 @@
     let hlsInstance = null;
 
     async function playVideo() {
-      const url = document.getElementById('url').value.trim();
+      const urlInput = document.getElementById('url');
       const status = document.getElementById('status');
       const video = document.getElementById('player');
+      const url = urlInput.value.trim();
 
-      if (!url) return;
+      if (!url) {
+        status.innerText = 'Please enter a valid video link.';
+        return;
+      }
 
-      status.innerText = 'Extracting media stream locally...';
+      status.innerText = 'Extracting media stream...';
 
       if (hlsInstance) {
         hlsInstance.destroy();
+        hlsInstance = null;
       }
 
       try {
@@ -52,8 +121,8 @@
         const data = await response.json();
 
         if (data.status === 'success' && data.url) {
-          status.innerText = 'Playing stream...';
-          
+          status.innerText = 'Playing video stream...';
+
           if (data.url.includes('.m3u8') && Hls.isSupported()) {
             hlsInstance = new Hls();
             hlsInstance.loadSource(data.url);
@@ -66,7 +135,7 @@
             video.play();
           }
         } else {
-          status.innerText = data.message || 'Unable to extract stream.';
+          status.innerText = data.message || 'Failed to resolve stream.';
         }
       } catch (err) {
         console.error(err);
