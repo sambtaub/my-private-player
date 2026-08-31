@@ -41,6 +41,22 @@
       return match ? match[1] : null;
     }
 
+    async function fetchStream(videoId, clientType, clientConfig) {
+      const res = await fetch('/proxy-innertube', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: 'player',
+          clientType: clientType,
+          body: {
+            videoId: videoId,
+            context: { client: clientConfig }
+          }
+        })
+      });
+      return await res.json();
+    }
+
     async function playVideo() {
       const urlInput = document.getElementById('url');
       const status = document.getElementById('status');
@@ -52,7 +68,7 @@
         return;
       }
 
-      status.innerText = 'Resolving stream via Android InnerTube client...';
+      status.innerText = 'Extracting stream manifest...';
 
       if (hlsInstance) {
         hlsInstance.destroy();
@@ -60,48 +76,32 @@
       }
 
       try {
-        // Query YouTube Android API through proxy to bypass datacenter IP restrictions
-        const proxyRes = await fetch('/proxy-innertube', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            endpoint: 'player',
-            body: {
-              videoId: videoId,
-              context: {
-                client: {
-                  clientName: 'ANDROID',
-                  clientVersion: '19.29.37',
-                  androidSdkVersion: 30,
-                  hl: 'en',
-                  gl: 'US'
-                }
-              }
-            }
-          })
+        // Attempt 1: TV Client HLS Manifest
+        let data = await fetchStream(videoId, 'TV', {
+          clientName: 'TVHTML5',
+          clientVersion: '7.20260101.00.00'
         });
 
-        const data = await proxyRes.json();
-        const streamingData = data.streamingData;
+        let mediaUrl = data?.streamingData?.hlsManifestUrl;
 
-        if (!streamingData) {
-          status.innerText = 'Unable to resolve video stream format.';
-          return;
+        // Attempt 2: Embedded Client HLS Manifest Fallback
+        if (!mediaUrl) {
+          status.innerText = 'Retrying via Embedded player node...';
+          data = await fetchStream(videoId, 'EMBEDDED', {
+            clientName: 'WEB_EMBEDDED_PLAYER',
+            clientVersion: '1.20260101.00.00'
+          });
+          mediaUrl = data?.streamingData?.hlsManifestUrl;
         }
 
-        // 1. Prefer HLS adaptive manifest
-        let mediaUrl = streamingData.hlsManifestUrl;
-
-        // 2. Fallback to direct video/audio stream format
-        if (!mediaUrl && streamingData.formats && streamingData.formats.length > 0) {
-          mediaUrl = streamingData.formats[0].url;
-        } else if (!mediaUrl && streamingData.adaptiveFormats && streamingData.adaptiveFormats.length > 0) {
-          const directStream = streamingData.adaptiveFormats.find(f => f.url && f.mimeType.includes('video/mp4'));
-          if (directStream) mediaUrl = directStream.url;
+        // Attempt 3: Direct Progressive Stream URL
+        if (!mediaUrl && data?.streamingData?.formats?.length > 0) {
+          const direct = data.streamingData.formats.find(f => f.url);
+          if (direct) mediaUrl = direct.url;
         }
 
         if (mediaUrl) {
-          status.innerText = 'Playing stream...';
+          status.innerText = 'Playing video stream...';
           
           if (mediaUrl.includes('.m3u8') && Hls.isSupported()) {
             hlsInstance = new Hls();
@@ -115,11 +115,11 @@
             video.play();
           }
         } else {
-          status.innerText = 'Video stream restricted or requires cipher deciphering.';
+          status.innerText = 'This video is age-restricted or disabled for embedded playback.';
         }
       } catch (err) {
         console.error(err);
-        status.innerText = 'Network error resolving video stream.';
+        status.innerText = 'Error resolving video stream.';
       }
     }
   </script>
