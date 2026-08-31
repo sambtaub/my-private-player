@@ -30,7 +30,7 @@ HTML_TEMPLATE = """
   <h2>Private Stream Proxy</h2>
 
   <div class="controls">
-    <input type="text" id="url" placeholder="Paste YouTube link..." onkeydown="if(event.key==='Enter') playVideo()">
+    <input type="text" id="url" placeholder="Paste YouTube link (https://...)" onkeydown="if(event.key==='Enter') playVideo()">
     <button onclick="playVideo()">Play Stream</button>
   </div>
 
@@ -46,16 +46,15 @@ HTML_TEMPLATE = """
       const status = document.getElementById('status');
       const video = document.getElementById('player');
 
-      if (!urlInput) {
-        status.innerText = 'Please enter a valid link.';
+      if (!urlInput || !urlInput.startsWith('http')) {
+        status.innerText = 'Please paste a full YouTube URL starting with https://';
         return;
       }
 
-      status.innerText = 'Resolving media via server proxy...';
-      const proxyStreamUrl = `/stream?url=${encodeURIComponent(urlInput)}`;
-      video.src = proxyStreamUrl;
+      status.innerText = 'Extracting media on server...';
+      video.src = `/stream?url=${encodeURIComponent(urlInput)}`;
       
-      video.onloadedmetadata = () => {
+      video.onloadeddata = () => {
         status.innerText = 'Streaming active (Zero client YT connection).';
       };
       
@@ -73,11 +72,15 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
 @app.route('/stream')
 def stream():
     video_url = request.args.get('url')
-    if not video_url:
-        return jsonify({"error": "URL parameter missing"}), 400
+    if not video_url or not video_url.startswith('http'):
+        return jsonify({"error": "Valid http/https URL required"}), 400
 
     ydl_opts = {
         'format': 'best[ext=mp4]/best',
@@ -97,8 +100,8 @@ def stream():
                         break
 
     except Exception as e:
-        print(f"Extraction error: {e}")
-        return jsonify({"error": "Failed to resolve stream link"}), 500
+        print(f"yt-dlp extraction error: {e}")
+        return jsonify({"error": "Failed to resolve video stream link"}), 500
 
     if not target_url:
         return jsonify({"error": "No playable stream URL found"}), 404
