@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "youtube-po-token-generator": "^0.4.0"
   }
 }
