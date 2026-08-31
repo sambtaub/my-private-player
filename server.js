@@ -1,7 +1,6 @@
 const express = require('express');
 const path = require('path');
 const ytdl = require('@distube/ytdl-core');
-const { generate } = require('youtube-po-token-generator');
 
 const app = express();
 
@@ -14,50 +13,27 @@ app.get('/', (req, res) => {
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
-// Cached PO Token & Visitor Data
-let poTokenData = null;
-
-async function refreshTokenData() {
-    try {
-        console.log('Generating server-side PO Token...');
-        poTokenData = await generate();
-        console.log('Successfully generated PO Token & Visitor Data.');
-    } catch (err) {
-        console.error('Failed to generate PO Token:', err.message);
-    }
-}
-
-// Generate initial token on boot and refresh every 3 hours
-refreshTokenData();
-setInterval(refreshTokenData, 3 * 60 * 60 * 1000);
-
 app.get('/get-stream', async (req, res) => {
     const videoUrl = req.query.url;
+
     if (!videoUrl || !ytdl.validateURL(videoUrl)) {
-        return res.json({ status: 'error', message: 'Invalid YouTube URL' });
+        return res.json({ status: 'error', message: 'Invalid or missing YouTube URL.' });
     }
 
     try {
-        // Build ytdl options with server-side attestation tokens
-        const options = {
-            playerClients: ['WEB_EMBEDDED', 'IOS', 'ANDROID']
-        };
+        // Query mobile and TV InnerTube clients to bypass desktop web bot enforcement
+        const info = await ytdl.getInfo(videoUrl, {
+            playerClients: ['IOS', 'ANDROID', 'TV', 'WEB_EMBEDDED']
+        });
 
-        if (poTokenData && poTokenData.poToken && poTokenData.visitorData) {
-            options.poToken = poTokenData.poToken;
-            options.visitorData = poTokenData.visitorData;
-        }
-
-        const info = await ytdl.getInfo(videoUrl, options);
-
-        // 1. Prefer HLS (.m3u8) streams to bypass browser MP4 filters
+        // 1. Prefer HLS (.m3u8) manifests (bypasses direct MP4 playback restrictions)
         let streamUrl = info.formats.find(f => f.isHLS)?.url;
 
-        // 2. Fallback to direct video/audio combined streams
+        // 2. Fallback to combined video & audio streams
         if (!streamUrl) {
-            const format = ytdl.chooseFormat(info.formats, { 
-                quality: 'highestvideo', 
-                filter: 'audioandvideo' 
+            const format = ytdl.chooseFormat(info.formats, {
+                quality: 'highestvideo',
+                filter: 'audioandvideo'
             });
             streamUrl = format?.url;
         }
@@ -65,17 +41,15 @@ app.get('/get-stream', async (req, res) => {
         if (streamUrl) {
             return res.json({ status: 'success', url: streamUrl });
         } else {
-            return res.json({ status: 'error', message: 'No playable stream format resolved.' });
+            return res.json({ status: 'error', message: 'No playable stream format could be extracted.' });
         }
     } catch (err) {
-        console.error('ytdl extraction error:', err.message);
-        
-        // Attempt immediate token refresh on failure
-        refreshTokenData();
+        console.error('ytdl-core extraction error:', err.message);
 
-        return res.json({ 
-            status: 'error', 
-            message: 'Stream extraction failed. Re-authenticating token, try again in 5 seconds.' 
+        // Fail safely with JSON rather than crashing the Express process
+        return res.json({
+            status: 'error',
+            message: 'Server IP block detected by YouTube. Try another video link.'
         });
     }
 });
