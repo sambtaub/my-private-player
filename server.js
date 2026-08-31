@@ -11,66 +11,30 @@ app.get('/', (req, res) => {
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
-// Redundant list of open API mirrors
-const INSTANCES = [
-    { type: 'piped', url: 'https://pipedapi.kavin.rocks' },
-    { type: 'piped', url: 'https://api.piped.privacydev.net' },
-    { type: 'invidious', url: 'https://invidious.nerdvpn.de' },
-    { type: 'invidious', url: 'https://inv.riverside.rocks' }
-];
+// Pure CORS Proxy Endpoint for YouTube's InnerTube API
+app.post('/proxy-innertube', async (req, res) => {
+    const { endpoint, body } = req.body;
+    if (!endpoint) return res.status(400).json({ error: 'Endpoint required' });
 
-app.get('/get-stream', async (req, res) => {
-    const videoUrl = req.query.url;
-    if (!videoUrl) return res.json({ status: 'error', message: 'URL required.' });
+    try {
+        const ytRes = await fetch(`https://www.youtube.com/youtubei/v1/${endpoint}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 11; US) gzip',
+                'X-YouTube-Client-Name': '3',
+                'X-YouTube-Client-Version': '19.29.37'
+            },
+            body: JSON.stringify(body)
+        });
 
-    const match = videoUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=))([^"&?\/\s]{11})/);
-    if (!match) return res.json({ status: 'error', message: 'Invalid YouTube URL.' });
-
-    const videoId = match[1];
-
-    for (const node of INSTANCES) {
-        try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3500);
-
-            let mediaUrl = null;
-
-            if (node.type === 'piped') {
-                const apiRes = await fetch(`${node.url}/streams/${videoId}`, { signal: controller.signal });
-                clearTimeout(timeout);
-                if (apiRes.ok) {
-                    const data = await apiRes.json();
-                    if (data.hls) {
-                        mediaUrl = data.hls;
-                    } else if (data.videoStreams && data.videoStreams.length > 0) {
-                        const stream = data.videoStreams.find(s => s.mimeType?.includes('mp4')) || data.videoStreams[0];
-                        mediaUrl = stream?.url;
-                    }
-                }
-            } else if (node.type === 'invidious') {
-                const apiRes = await fetch(`${node.url}/api/v1/videos/${videoId}`, { signal: controller.signal });
-                clearTimeout(timeout);
-                if (apiRes.ok) {
-                    const data = await apiRes.json();
-                    if (data.formatStreams && data.formatStreams.length > 0) {
-                        mediaUrl = data.formatStreams[data.formatStreams.length - 1].url;
-                    }
-                }
-            }
-
-            if (mediaUrl) {
-                return res.json({ status: 'success', url: mediaUrl });
-            }
-        } catch (e) {
-            console.log(`Node failed: ${node.url}`);
-        }
+        const data = await ytRes.json();
+        return res.json(data);
+    } catch (err) {
+        console.error('Proxy Error:', err.message);
+        return res.status(500).json({ error: 'Proxy request failed.' });
     }
-
-    return res.json({ 
-        status: 'error', 
-        message: 'All API proxy nodes failed. Try again in a few moments.' 
-    });
 });
 
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
